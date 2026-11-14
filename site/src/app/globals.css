@@ -138,9 +138,41 @@ nav {
 .stage canvas { position: absolute; inset: 0; pointer-events: none; background: transparent; }
 .camera-bar { display: flex; justify-content: space-between; color: #c9c1b6; font-size: 0.92rem; }
 
+.nav-links { display: flex; gap: 22px; }
+
+.apps-hero { padding: 28px 0 12px; max-width: 40rem; }
+.apps-hero h1 {
+  margin: 0;
+  font-family: var(--font-display), serif;
+  font-size: clamp(3rem, 6vw, 4.6rem);
+  font-weight: 460;
+  letter-spacing: -0.05em;
+  line-height: 0.92;
+}
+.apps-steps { margin-top: 48px; }
+.snippet { padding: 36px 0; border-top: 1px solid var(--line); }
+.snippet h2 {
+  margin: 0 0 14px;
+  font-family: var(--font-display), serif;
+  font-size: 2rem;
+  font-weight: 460;
+}
+.snippet pre {
+  margin: 0;
+  padding: 18px;
+  overflow: auto;
+  border-radius: 16px;
+  background: var(--ink);
+  color: #f3efe7;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+.snippet p { color: var(--quiet); line-height: 1.5; }
+.pass a { text-decoration: underline; }
+
 .guide {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 28px;
   margin: 0;
   padding: 28px 0 0;

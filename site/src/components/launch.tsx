@@ -36,6 +36,7 @@ export function Launch() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [seen, setSeen] = useState("Put your hand in frame.");
+  const [paid, setPaid] = useState(false);
 
   async function refresh(accountId: string) {
     try {
@@ -74,9 +75,10 @@ export function Launch() {
         if (row?.ready && Number(row.id) > beforeId) {
           setChallenge(toChallenge(row));
           sent.current = false;
+          setPaid(false);
           setHeldCount(0);
           setStep(0);
-          setNote("Three poses are ready. Hold each one.");
+          setNote("Hold each gesture until it locks.");
           return;
         }
         await wait(3000);
@@ -94,9 +96,10 @@ export function Launch() {
       if (row?.ready && Number(row.id) > beforeId) {
         setChallenge(toChallenge(row));
         sent.current = false;
+        setPaid(false);
         setHeldCount(0);
         setStep(0);
-        setNote("Three poses. Hold each one until it locks.");
+        setNote("Hold each gesture until it locks.");
         setBusy(false);
         return;
       }
@@ -258,16 +261,17 @@ export function Launch() {
         const params = new URLSearchParams(window.location.search);
         if (params.get("flow") === "pass") {
           window.opener?.postMessage({ type: "held:fresh", account: near.accountId }, "*");
-          setNote("Pass accepted. You can return to the app.");
+          setNote("Captcha done. Return to the app.");
           const ret = params.get("return");
           if (ret) window.location.href = ret;
           else window.close();
           return;
         }
-        setNote("Pass accepted. Confirm the mint in Meteor. You pay this gas.");
+        setNote("Captcha done. Confirm the mint in Meteor.");
         await near.call(COIN, "mint", {}, "0");
+        setPaid(true);
         await refresh(near.accountId);
-        setNote("One coin paid to this account.");
+        setNote("");
         const ret = params.get("return");
         if (ret) window.location.href = ret;
       } else {
@@ -292,21 +296,36 @@ export function Launch() {
     setBusy(true);
     setNote("Asking the coin whether this account is fresh.");
     try {
+      if (paid) {
+        setNote("Signing a new captcha.");
+        await requestPoses();
+        return;
+      }
       const ok = Boolean(await isFresh(near.accountId));
       setFresh(ok);
       if (ok) {
-        setNote("Confirm the mint in Meteor. You pay this gas.");
+        setNote("Confirm the mint in Meteor.");
         await near.call(COIN, "mint", {}, "0");
+        setPaid(true);
         await refresh(near.accountId);
-        setNote("One coin paid to this account.");
+        setNote("");
         const ret = new URLSearchParams(window.location.search).get("return");
         if (ret) window.location.href = ret;
         return;
       }
-      setNote("No pass yet. Signing the draw. The relayer pays this gas.");
+      setNote("Captcha first. Signing the three gestures.");
       await requestPoses();
     } catch (error) {
-      setNote(error instanceof Error ? error.message : "The mint did not send.");
+      const message = error instanceof Error ? error.message : "The mint did not send.";
+      if (/already used|unreachable/i.test(message)) {
+        setPaid(true);
+        setNote("");
+      } else if (/Hold the poses/i.test(message)) {
+        setFresh(false);
+        setNote("The coin refused. Finish the captcha, then mint.");
+      } else {
+        setNote(message);
+      }
     } finally {
       setBusy(false);
     }
@@ -316,11 +335,11 @@ export function Launch() {
     return (
       <div className="action">
         <div className="desk-top">
-          <span>This attempt</span>
+          <span>Captcha</span>
           <span>Testnet</span>
         </div>
-        <h2>Connect, then the page reads your pass.</h2>
-        <p>Meteor creates the testnet account. Request testnet NEAR from the faucet inside that wallet, then come back to this button.</p>
+        <h2>Connect a testnet wallet.</h2>
+        <p>Meteor can create the account. Then this button asks the coin, and the captcha only opens when the coin would refuse.</p>
         <Button variant="clay" size="lg" onClick={near.open} disabled={!near.ready || busy}>
           {near.ready ? "Connect wallet" : "Loading wallets"}
         </Button>
@@ -333,14 +352,18 @@ export function Launch() {
   return (
     <div className="action">
       <div className="desk-top">
-        <span>This attempt</span>
+        <span>Captcha</span>
         <button type="button" onClick={() => void near.signOut()}>Disconnect</button>
       </div>
       <p className="who">{near.accountId}</p>
-      {fresh && <h2>This account is fresh. The camera stays off.</h2>}
-      {!fresh && !challenge && <h2>No pass on this account.</h2>}
-      {!fresh && challenge && heldCount < 3 && <h2>Hold {pose === undefined ? "the pose" : poseNames[pose]}.</h2>}
-      {!fresh && challenge && heldCount === 3 && <h2>The holds are ready to send.</h2>}
+      {paid && <h2>One coin paid to this account.</h2>}
+      {paid && <p>This captcha pays once. Hold a new one for another mint.</p>}
+      {!paid && fresh && <h2>Captcha done.</h2>}
+      {!paid && fresh && <p>One mint is open. It closes after one minute.</p>}
+      {!paid && !fresh && !challenge && <h2>Captcha first.</h2>}
+      {!paid && !fresh && !challenge && <p>Three gestures on this device. The coin asks before it pays.</p>}
+      {!paid && !fresh && challenge && heldCount < 3 && <h2>Hold {pose === undefined ? "the gesture" : poseNames[pose]}.</h2>}
+      {!paid && !fresh && challenge && heldCount === 3 && <h2>Sending the captcha.</h2>}
       {filming && (
         <div className="camera">
           <div className="stage">
@@ -348,7 +371,7 @@ export function Launch() {
           </div>
           <div className="camera-bar">
             <span>Pose {Math.min(step + 1, 3)} of 3. {seen}</span>
-            <button type="button" disabled={busy} onClick={() => void requestPoses()}>Draw again</button>
+            <button type="button" disabled={busy} onClick={() => void requestPoses()}>New captcha</button>
           </div>
         </div>
       )}
@@ -362,7 +385,7 @@ export function Launch() {
           ))}
         </ol>
       )}
-      {!filming && <Button variant="clay" size="lg" disabled={busy} onClick={() => void onMint()}>Mint</Button>}
+      {!filming && <Button variant="clay" size="lg" disabled={busy} onClick={() => void onMint()}>{paid ? "New captcha" : "Mint"}</Button>}
       {note && <p className="note">{note}</p>}
     </div>
   );

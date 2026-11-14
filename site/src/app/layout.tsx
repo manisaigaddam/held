@@ -8,7 +8,7 @@ const sans = Outfit({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: "Held",
-  description: "Hold three poses. Then mint on NEAR.",
+  description: "A one-minute captcha for a mint on NEAR. The coin asks before it pays.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
