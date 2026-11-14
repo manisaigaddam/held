@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useNear } from "@/components/near-provider";
-import { COIN, DRAW_DEPOSIT, attempt, isFresh, poseIds, poseNames, type Attempt, type Challenge } from "@/lib/chain";
+import { COIN, attempt, isFresh, poseIds, poseNames, type Attempt, type Challenge } from "@/lib/chain";
 const HOLD_MS = 750;
 type Sample = { pose: number; at: number; confidence: number };
 type OpenChallenge = Challenge & { id: number };
@@ -84,7 +84,7 @@ export function Launch() {
     })();
     let walletError = "";
     try {
-      await near.relay("request_challenge", {}, DRAW_DEPOSIT);
+      await near.relay("request_challenge", {});
     } catch (error) {
       walletError = error instanceof Error ? error.message : "The wallet did not finish.";
     }
@@ -255,10 +255,21 @@ export function Launch() {
       if (accepted) {
         setFresh(true);
         setChallenge(null);
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("flow") === "pass") {
+          window.opener?.postMessage({ type: "held:fresh", account: near.accountId }, "*");
+          setNote("Pass accepted. You can return to the app.");
+          const ret = params.get("return");
+          if (ret) window.location.href = ret;
+          else window.close();
+          return;
+        }
         setNote("Pass accepted. Confirm the mint in Meteor. You pay this gas.");
         await near.call(COIN, "mint", {}, "0");
         await refresh(near.accountId);
         setNote("One coin paid to this account.");
+        const ret = params.get("return");
+        if (ret) window.location.href = ret;
       } else {
         sent.current = false;
         setNote("The holds were not accepted.");
@@ -288,6 +299,8 @@ export function Launch() {
         await near.call(COIN, "mint", {}, "0");
         await refresh(near.accountId);
         setNote("One coin paid to this account.");
+        const ret = new URLSearchParams(window.location.search).get("return");
+        if (ret) window.location.href = ret;
         return;
       }
       setNote("No pass yet. Signing the draw. The relayer pays this gas.");

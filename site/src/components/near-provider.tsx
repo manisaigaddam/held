@@ -11,8 +11,17 @@ type NearContextValue = {
   open: () => void;
   signOut: () => Promise<void>;
   call: (receiverId: string, methodName: string, args: object, deposit: string) => Promise<unknown>;
-  relay: (methodName: "request_challenge", args: object, deposit: string) => Promise<unknown>;
+  relay: (methodName: "request_challenge", args: object) => Promise<unknown>;
 };
+
+function delegatePayload(value: unknown) {
+  if (value instanceof Uint8Array) {
+    let binary = "";
+    value.forEach((byte) => { binary += String.fromCharCode(byte); });
+    return btoa(binary);
+  }
+  return value;
+}
 
 const NearContext = createContext<NearContextValue | null>(null);
 
@@ -83,27 +92,39 @@ export function NearProvider({ children }: { children: ReactNode }) {
         }],
       });
     },
-    relay: async (methodName, args, deposit) => {
+    relay: async (methodName, args) => {
       const signer = wallet ?? await connector?.wallet();
       if (!signer || !accountId) throw new Error("Connect a testnet wallet first");
-      const signed = await signer.signDelegateActions({
+      const action = {
+        type: "FunctionCall" as const,
+        params: { methodName, args, gas: GAS, deposit: "0" },
+      };
+      const direct = () => signer.signAndSendTransaction({
         signerId: accountId,
-        delegateActions: [{
-          receiverId: REGISTRY,
-          actions: [{
-            type: "FunctionCall",
-            params: { methodName, args, gas: GAS, deposit },
-          }],
-        }],
+        receiverId: REGISTRY,
+        actions: [action],
       });
-      const response = await fetch("/api/relay", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ signedDelegateAction: signed.signedDelegateActions[0] }),
-      });
-      const body = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(body.error ?? "The relayer did not send");
-      return body;
+      try {
+        const signed = await signer.signDelegateActions({
+          signerId: accountId,
+          delegateActions: [{ receiverId: REGISTRY, actions: [action] }],
+        });
+        const response = await fetch("/api/relay", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ signedDelegateAction: delegatePayload(signed.signedDelegateActions[0]) }),
+        });
+        const body = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          if (body.error?.includes("RELAYER_")) return direct();
+          throw new Error(body.error ?? "The relayer did not send");
+        }
+        return body;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (/delegate|RELAYER_|signature this relayer/i.test(message)) return direct();
+        throw error;
+      }
     },
   }), [accountId, connector, wallet, error, ready]);
 
