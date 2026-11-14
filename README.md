@@ -6,12 +6,12 @@ Bots mint a coin by calling the contract. A check that lives only in a website d
 
 Held is a captcha on NEAR and the first coin that uses it. A person holds three gestures chosen for that mint. The picture stays on their device. The server sees the pose name, the time, and a confidence score. The chain stores the account and the minute, not the hand.
 
-The captcha lasts one minute and pays once. The next mint asks for the gestures again. The coin asks Held from inside `mint` and refuses when the answer is no.
+The captcha has no expiry of its own. The contract that asks passes the window, as GestureGate does with `isVerifiedWithin`. This coin asks for the last minute and pays once per captcha. A new captcha mints again. Another app can use the same captcha for as long as its own window allows.
 
 ## What it provides
 
-- A one-minute captcha, reusable by any contract that asks.
-- One payment per captcha. A second mint on the same minute is refused.
+- A captcha any contract can ask about, with the window passed by that contract.
+- This coin pays once per captcha. Another app is not used up by that mint.
 - The camera in the user’s browser. No finger positions are stored or sent to the chain.
 - A browser helper, `sdk/index.ts`, that reads the check and opens the captcha when needed.
 - The contract call in `sdk/check.rs`. The example that already uses it is `coin.held141126.testnet`.

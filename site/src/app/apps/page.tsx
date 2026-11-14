@@ -24,7 +24,7 @@ export default function AppsPage() {
         <li>
           <em>02</em>
           <strong>Captcha</strong>
-          <span>Held runs the camera in the user’s browser. The hand does not go on the chain. A pass is a minute on the check.</span>
+          <span>Held runs the camera in the user’s browser. The hand does not go on the chain. The check stores when the captcha was done.</span>
         </li>
         <li>
           <em>03</em>
@@ -53,7 +53,7 @@ await ensureFresh(account);
         .with_static_gas(Gas::from_tgas(20))
         .on_claim(caller),
 );`}</pre>
-        <p>The follow-up pays, claims, or votes only when the answer is yes. The full paste is in <code>sdk/check.rs</code>.</p>
+        <p><code>60_000</code> is this coin’s window, not a rule of the captcha. Pass the window your app wants. The full paste is in <code>sdk/check.rs</code>.</p>
       </section>
 
       <footer>

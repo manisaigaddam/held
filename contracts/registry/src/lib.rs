@@ -111,9 +111,18 @@ impl Registry {
     }
 
     pub fn is_fresh(&self, account: AccountId, max_age_ms: u64) -> bool {
-        self.fresh.get(&account).is_some_and(|fresh| {
+        self.fresh_id(account, max_age_ms).is_some()
+    }
+
+    /// The captcha id, if it is still inside the window the caller asked for.
+    pub fn fresh_id(&self, account: AccountId, max_age_ms: u64) -> Option<U64> {
+        self.fresh.get(&account).and_then(|fresh| {
             let now = env::block_timestamp_ms();
-            now >= fresh.at_ms && now - fresh.at_ms <= max_age_ms
+            if now >= fresh.at_ms && now - fresh.at_ms <= max_age_ms {
+                Some(U64(fresh.challenge_id))
+            } else {
+                None
+            }
         })
     }
 

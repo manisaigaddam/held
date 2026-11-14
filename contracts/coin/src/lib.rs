@@ -1,5 +1,6 @@
-//! The first coin. Mint asks Held, then pays a fixed amount once per pass.
+//! The first coin. This app asks for a captcha from the last minute, and pays once per captcha.
 
+use near_sdk::json_types::U64;
 use near_sdk::store::LookupMap;
 use near_sdk::{env, near, serde_json, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise};
 
@@ -35,7 +36,7 @@ impl Coin {
     pub fn mint(&mut self) -> Promise {
         let caller = env::predecessor_account_id();
         Promise::new(self.held.clone()).function_call(
-            "is_fresh".to_string(),
+            "fresh_id".to_string(),
             serde_json::json!({ "account": caller, "max_age_ms": FRESH_MS })
                 .to_string()
                 .into_bytes(),
@@ -51,20 +52,21 @@ impl Coin {
 
     #[private]
     pub fn on_mint(&mut self, caller: AccountId) -> String {
-        let fresh = match env::promise_result(0) {
+        let captcha = match env::promise_result(0) {
             near_sdk::PromiseResult::Successful(bytes) => {
-                serde_json::from_slice::<bool>(&bytes).unwrap_or(false)
+                serde_json::from_slice::<Option<U64>>(&bytes).ok().flatten()
             }
-            _ => false,
+            _ => None,
         };
-        assert!(fresh, "Hold the poses first");
-        let now = env::block_timestamp_ms();
-        if let Some(used_at) = self.used_pass_at.get(&caller) {
-            assert!(now - *used_at > FRESH_MS, "This pass was already used");
+        let Some(captcha) = captcha else {
+            env::panic_str("Hold the gestures first");
+        };
+        if self.used_pass_at.get(&caller) == Some(&captcha.0) {
+            env::panic_str("This captcha already paid");
         }
         let balance = self.balances.get(&caller).copied().unwrap_or(0);
         self.balances.insert(caller.clone(), balance + MINT_AMOUNT);
-        self.used_pass_at.insert(caller, now);
+        self.used_pass_at.insert(caller, captcha.0);
         "minted".to_string()
     }
 

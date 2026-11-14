@@ -1,5 +1,6 @@
 //! Paste this into the method you want to protect.
-//! `held` is `held141126.testnet`. The coin at `coin.held141126.testnet` is the example.
+//! `60_000` is the window this example asks for. Your app passes its own.
+//! The coin at `coin.held141126.testnet` also pays only once per captcha.
 
 use near_sdk::{env, near, serde_json, AccountId, Gas, NearToken, Promise};
 

@@ -317,7 +317,7 @@ export function Launch() {
       await requestPoses();
     } catch (error) {
       const message = error instanceof Error ? error.message : "The mint did not send.";
-      if (/already used|unreachable/i.test(message)) {
+      if (/already used|already paid|unreachable/i.test(message)) {
         setPaid(true);
         setNote("");
       } else if (/Hold the poses/i.test(message)) {
@@ -357,9 +357,9 @@ export function Launch() {
       </div>
       <p className="who">{near.accountId}</p>
       {paid && <h2>One coin paid to this account.</h2>}
-      {paid && <p>This captcha pays once. Hold a new one for another mint.</p>}
+      {paid && <p>This coin already paid for this captcha. A new captcha mints again. Another app can still use this one.</p>}
       {!paid && fresh && <h2>Captcha done.</h2>}
-      {!paid && fresh && <p>One mint is open. It closes after one minute.</p>}
+      {!paid && fresh && <p>This coin accepts a captcha from the last minute, and pays once.</p>}
       {!paid && !fresh && !challenge && <h2>Captcha first.</h2>}
       {!paid && !fresh && !challenge && <p>Three gestures on this device. The coin asks before it pays.</p>}
       {!paid && !fresh && challenge && heldCount < 3 && <h2>Hold {pose === undefined ? "the gesture" : poseNames[pose]}.</h2>}

@@ -1,8 +1,8 @@
 import { Launch } from "@/components/launch";
 
 const points = [
-  ["One minute", "The captcha opens a mint, then it closes. The next mint asks for the gestures again."],
-  ["Once", "The same captcha cannot pay twice. A second mint is refused until a new captcha is done."],
+  ["The app chooses", "There is no universal expiry. The contract that asks passes its own window, the way GestureGate does."],
+  ["Once here", "This coin pays once for a captcha. Another coin from this app needs a new captcha. Other apps are not spent by that mint."],
   ["The coin asks", "The mint calls the check itself. Skipping this page does not skip the question."],
 ];
 
@@ -21,7 +21,7 @@ export default function Home() {
         <div>
           <p className="kicker">NEAR testnet</p>
           <h1>Mint. The coin asks first.</h1>
-          <p className="lede">A captcha for a mint. It lasts one minute, it pays once, and any later mint asks for the gestures again.</p>
+          <p className="lede">A captcha other apps can reuse. Each app chooses how recent it must be. This coin asks for the last minute, and pays once per captcha.</p>
         </div>
         <section className="desk" id="mint" aria-label="Mint">
           <Launch />
