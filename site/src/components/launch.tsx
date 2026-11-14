@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useNear } from "@/components/near-provider";
 import { COIN, DRAW_DEPOSIT, JUDGE_DEPOSIT, REGISTRY, attempt, isFresh, poseIds, poseNames, type Attempt, type Challenge } from "@/lib/chain";
-import { poseMatches } from "@/lib/poses";
 
 const HOLD_MS = 750;
 type Moment = { pose: number; held_ms: number; points: number[][] };
@@ -33,9 +32,9 @@ export function Launch() {
   const [challenge, setChallenge] = useState<OpenChallenge | null>(null);
   const [heldCount, setHeldCount] = useState(0);
   const [step, setStep] = useState(0);
-  const [holding, setHolding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
+  const [seen, setSeen] = useState("Put your hand in frame.");
 
   async function refresh(accountId: string) {
     try {
@@ -111,21 +110,27 @@ export function Launch() {
     await watch.catch(() => undefined);
   }
 
+  const filming = Boolean(!fresh && challenge && heldCount < 3);
+
   useEffect(() => {
-    if (!holding || !challenge) return;
+    if (!filming || !challenge) return;
     const video = videoRef.current;
     if (!video) return;
+    const poses = challenge.poses;
     let stopped = false;
     let stream: MediaStream | null = null;
     let frame = 0;
+    let detector: { close?: () => void; recognizeForVideo: (v: HTMLVideoElement, t: number) => { gestures?: { categoryName?: string; score?: number }[][]; landmarks?: { x: number; y: number }[][] } } | null = null;
     const run = async () => {
+      moments.current = [];
+      setSeen("Starting the camera.");
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
+          audio: false,
+        });
       } catch (error) {
-        if (!stopped) {
-          setHolding(false);
-          setNote(error instanceof Error ? error.message : "The camera did not start.");
-        }
+        if (!stopped) setSeen(error instanceof Error ? error.message : "The camera did not start.");
         return;
       }
       if (stopped || !videoRef.current) {
@@ -134,46 +139,68 @@ export function Launch() {
       }
       video.srcObject = stream;
       await video.play();
-      const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/+esm");
-      const files = await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm");
-      const detector = await vision.GestureRecognizer.createFromOptions(files, {
+      const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/+esm");
+      const files = await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm");
+      detector = await vision.GestureRecognizer.createFromOptions(files, {
         baseOptions: {
-          modelAssetPath: "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+          delegate: "CPU",
+          modelAssetPath: "https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task",
         },
         runningMode: "VIDEO",
         numHands: 1,
+        minHandDetectionConfidence: 0.5,
+        minHandPresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+        cannedGesturesClassifierOptions: {
+          categoryAllowlist: Object.keys(poseIds),
+          scoreThreshold: 0.55,
+          maxResults: 1,
+        },
       });
+      if (stopped) return;
       let index = 0;
       let started: number | null = null;
       let lastMatch = 0;
       let lastPoints: number[][] | null = null;
+      let lastStamp = 0;
       const tick = () => {
-        if (stopped || !videoRef.current || index >= challenge.poses.length) return;
+        if (stopped || !videoRef.current || !detector || index >= poses.length) return;
         const now = performance.now();
-        const seen = detector.recognizeForVideo(video, now);
-        const name = seen.gestures?.[0]?.[0]?.categoryName;
-        const observed = name ? (poseIds[name] ?? -1) : -1;
-        const hand = seen.landmarks?.[0];
-        if (hand?.length === 21) lastPoints = hand.map((point) => [point.x, point.y]);
-        const required = challenge.poses[index];
-        if (observed === required && lastPoints && poseMatches(required, lastPoints)) {
-          started ??= now;
-          lastMatch = now;
-          if (now - started >= HOLD_MS) {
-            moments.current.push({ pose: required, held_ms: Math.round(now - started), points: lastPoints });
-            index += 1;
-            started = null;
-            setStep(index);
-            setHeldCount(index);
-            if (index >= challenge.poses.length) {
-              stream?.getTracks().forEach((track) => track.stop());
-              video.srcObject = null;
-              setHolding(false);
-              setNote("All three locked. Send them.");
-              return;
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && now > lastStamp) {
+          lastStamp = now;
+          try {
+            const result = detector.recognizeForVideo(video, now);
+            const recognized = result.gestures?.[0]?.[0];
+            const observed = recognized?.categoryName ? (poseIds[recognized.categoryName] ?? -1) : -1;
+            const hand = result.landmarks?.[0];
+            if (hand?.length === 21) lastPoints = hand.map((point) => [point.x, point.y]);
+            const required = poses[index];
+            const label = observed >= 0 ? poseNames[observed] : "no hand";
+            if (observed === required && lastPoints) {
+              started ??= now;
+              lastMatch = now;
+              const left = Math.max(0, HOLD_MS - (now - started));
+              setSeen(left > 0 ? `${poseNames[required]}. Hold ${Math.ceil(left / 100) / 10}s.` : poseNames[required]);
+              if (now - started >= HOLD_MS) {
+                moments.current.push({ pose: required, held_ms: Math.round(now - started), points: lastPoints });
+                index += 1;
+                started = null;
+                setStep(index);
+                setHeldCount(index);
+                if (index >= poses.length) {
+                  setSeen("All three locked.");
+                  setNote("All three locked. Send them.");
+                  return;
+                }
+              }
+            } else {
+              if (started && now - lastMatch > 180) started = null;
+              setSeen(observed < 0 ? "Put your hand in frame." : `Seeing ${label}.`);
             }
+          } catch {
+            // A frame can arrive before the previous one is finished.
           }
-        } else if (started && now - lastMatch > 140) started = null;
+        }
         frame = requestAnimationFrame(tick);
       };
       frame = requestAnimationFrame(tick);
@@ -182,18 +209,11 @@ export function Launch() {
     return () => {
       stopped = true;
       cancelAnimationFrame(frame);
+      detector?.close?.();
       stream?.getTracks().forEach((track) => track.stop());
+      if (videoRef.current) videoRef.current.srcObject = null;
     };
-  }, [holding, challenge]);
-
-  function startHold() {
-    if (!challenge) return;
-    moments.current = [];
-    setHeldCount(0);
-    setStep(0);
-    setNote("");
-    setHolding(true);
-  }
+  }, [filming, challenge]);
 
   async function submit() {
     if (!challenge || !near.accountId) return;
@@ -260,37 +280,31 @@ export function Launch() {
         <button type="button" onClick={() => void near.signOut()}>Disconnect</button>
       </div>
       <p className="who">{near.accountId}</p>
-      {holding && pose !== undefined ? (
+      {fresh && <h2>This account is fresh. The camera stays off.</h2>}
+      {!fresh && !challenge && <h2>No pass on this account.</h2>}
+      {!fresh && challenge && heldCount < 3 && <h2>Hold {pose === undefined ? "the pose" : poseNames[pose]}.</h2>}
+      {!fresh && challenge && heldCount === 3 && <h2>The holds are ready to send.</h2>}
+      {filming && (
         <div className="camera">
-          <strong>{poseNames[pose]}</strong>
           <video ref={videoRef} autoPlay playsInline muted />
           <div className="camera-bar">
-            <span>Pose {Math.min(step + 1, 3)} of 3. Hold still.</span>
-            <button type="button" onClick={() => setHolding(false)}>Close</button>
+            <span>Pose {Math.min(step + 1, 3)} of 3. {seen}</span>
           </div>
         </div>
-      ) : (
-        <>
-          {fresh && <h2>This account is fresh. The camera stays off.</h2>}
-          {!fresh && !challenge && <h2>No pass on this account.</h2>}
-          {!fresh && challenge && heldCount < 3 && <h2>Hold these, in order.</h2>}
-          {!fresh && challenge && heldCount === 3 && <h2>The holds are ready to send.</h2>}
-          {challenge && !fresh && (
-            <ol className="poses">
-              {challenge.poses.map((id, index) => (
-                <li key={`${id}-${index}`} className={index < heldCount ? "done" : index === step ? "now" : ""}>
-                  <em>{index + 1}</em>
-                  <span>{poseNames[id]}</span>
-                </li>
-              ))}
-            </ol>
-          )}
-          {fresh && <Button variant="clay" size="lg" disabled={busy} onClick={() => void mint()}>Mint</Button>}
-          {!fresh && !challenge && <Button variant="clay" size="lg" disabled={busy} onClick={() => void requestPoses()}>Get the poses</Button>}
-          {!fresh && challenge && heldCount < 3 && <Button variant="clay" size="lg" disabled={busy || holding} onClick={startHold}>Open the camera</Button>}
-          {!fresh && challenge && heldCount === 3 && <Button variant="clay" size="lg" disabled={busy} onClick={() => void submit()}>Send the holds</Button>}
-        </>
       )}
+      {challenge && !fresh && (
+        <ol className="poses">
+          {challenge.poses.map((id, index) => (
+            <li key={`${id}-${index}`} className={index < heldCount ? "done" : index === step ? "now" : ""}>
+              <em>{index + 1}</em>
+              <span>{poseNames[id]}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+      {fresh && <Button variant="clay" size="lg" disabled={busy} onClick={() => void mint()}>Mint</Button>}
+      {!fresh && !challenge && <Button variant="clay" size="lg" disabled={busy} onClick={() => void requestPoses()}>Get the poses</Button>}
+      {!fresh && challenge && heldCount === 3 && <Button variant="clay" size="lg" disabled={busy} onClick={() => void submit()}>Send the holds</Button>}
       {note && <p className="note">{note}</p>}
     </div>
   );
