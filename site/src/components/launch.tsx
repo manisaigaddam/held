@@ -4,10 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useNear } from "@/components/near-provider";
 import { COIN, DRAW_DEPOSIT, attempt, isFresh, poseIds, poseNames, type Attempt, type Challenge } from "@/lib/chain";
-import { poseMatches } from "@/lib/poses";
-
 const HOLD_MS = 750;
-type Moment = { pose: number; held_ms: number; points: number[][] };
+type Sample = { pose: number; at: number; confidence: number };
 type OpenChallenge = Challenge & { id: number };
 
 function wait(ms: number) {
@@ -28,8 +26,7 @@ function toChallenge(row: Attempt): OpenChallenge {
 export function Launch() {
   const near = useNear();
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const moments = useRef<Moment[]>([]);
+  const samples = useRef<Sample[]>([]);
   const sent = useRef(false);
   const finishRef = useRef<() => void>(() => {});
   const [fresh, setFresh] = useState(false);
@@ -121,31 +118,14 @@ export function Launch() {
   useEffect(() => {
     if (!filming || !challenge) return;
     const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas) return;
+    if (!video) return;
     const poses = challenge.poses;
-    const context = canvas.getContext("2d");
     let stopped = false;
     let stream: MediaStream | null = null;
     let frame = 0;
-    let detector: { close: () => void; recognizeForVideo: (v: HTMLVideoElement, t: number) => { gestures?: { categoryName?: string }[][]; landmarks?: { x: number; y: number }[][] } } | null = null;
-    const paint = (hand?: { x: number; y: number }[]) => {
-      if (!context) return;
-      const width = video.videoWidth || 640;
-      const height = video.videoHeight || 480;
-      if (canvas.width !== width) canvas.width = width;
-      if (canvas.height !== height) canvas.height = height;
-      context.clearRect(0, 0, width, height);
-      if (!hand) return;
-      context.fillStyle = "#f3efe7";
-      for (const point of hand) {
-        context.beginPath();
-        context.arc(point.x * width, point.y * height, 5, 0, Math.PI * 2);
-        context.fill();
-      }
-    };
+    let detector: { close: () => void; recognizeForVideo: (v: HTMLVideoElement, t: number) => { gestures?: { categoryName?: string; score?: number }[][] } } | null = null;
     const run = async () => {
-      moments.current = [];
+      samples.current = [];
       setSeen("Starting the camera.");
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -170,6 +150,11 @@ export function Launch() {
           minHandDetectionConfidence: 0.5,
           minHandPresenceConfidence: 0.5,
           minTrackingConfidence: 0.5,
+          cannedGesturesClassifierOptions: {
+            categoryAllowlist: Object.keys(poseIds),
+            scoreThreshold: 0.75,
+            maxResults: 1,
+          },
         });
       } catch (error) {
         if (!stopped) setSeen(error instanceof Error ? error.message : "The camera did not start.");
@@ -181,7 +166,7 @@ export function Launch() {
       let index = 0;
       let started: number | null = null;
       let lastMatch = 0;
-      let lastPoints: number[][] | null = null;
+      let sampleAt = 0;
       let lastStamp = 0;
       let lastLine = "";
       const say = (line: string) => {
@@ -196,24 +181,25 @@ export function Launch() {
           lastStamp = now;
           try {
             const result = detector.recognizeForVideo(video, now);
-            const name = result.gestures?.[0]?.[0]?.categoryName;
-            const observed = name ? (poseIds[name] ?? -1) : -1;
-            const hand = result.landmarks?.[0];
-            paint(hand);
-            if (hand?.length === 21) lastPoints = hand.map((point) => [point.x, point.y]);
+            const recognized = result.gestures?.[0]?.[0];
+            const observed = recognized?.categoryName ? (poseIds[recognized.categoryName] ?? -1) : -1;
+            const confidence = recognized?.score ?? 0;
             const required = poses[index];
             const label = observed >= 0 ? poseNames[observed] : "";
-            const shape = Boolean(lastPoints && poseMatches(required, lastPoints));
-            if (observed === required && shape && lastPoints) {
+            if (observed === required && confidence >= 0.75) {
               started ??= now;
               lastMatch = now;
+              if (now - sampleAt > 140) {
+                samples.current.push({ pose: observed, at: Math.round(now), confidence });
+                sampleAt = now;
+              }
               const left = Math.max(0, HOLD_MS - (now - started));
               say(`${poseNames[required]}. Hold ${Math.ceil(left / 100) / 10}s.`);
-              if (now - started >= HOLD_MS) {
-                moments.current.push({ pose: required, held_ms: Math.round(now - started), points: lastPoints });
+              const seenEnough = samples.current.filter((sample) => sample.pose === required).length >= 4;
+              if (now - started >= HOLD_MS && seenEnough) {
                 index += 1;
                 started = null;
-                lastPoints = null;
+                sampleAt = 0;
                 setStep(index);
                 setHeldCount(index);
                 if (index >= poses.length) {
@@ -225,7 +211,7 @@ export function Launch() {
               }
             } else {
               if (started && now - lastMatch > 180) started = null;
-              say(!label ? "Put your hand in frame." : observed === required ? `Seeing ${label}. Match the shape.` : `Seeing ${label}.`);
+              say(!label ? "Put your hand in frame." : `Seeing ${label}.`);
             }
           } catch {
             // The model skips a frame when the clock does not move forward.
@@ -256,7 +242,7 @@ export function Launch() {
         body: JSON.stringify({
           account: near.accountId,
           challengeId: String(challenge.id),
-          moments: moments.current,
+          samples: samples.current,
         }),
       });
       const body = (await response.json()) as { error?: string };
@@ -346,7 +332,6 @@ export function Launch() {
         <div className="camera">
           <div className="stage">
             <video ref={videoRef} autoPlay playsInline muted />
-            <canvas ref={canvasRef} />
           </div>
           <div className="camera-bar">
             <span>Pose {Math.min(step + 1, 3)} of 3. {seen}</span>
