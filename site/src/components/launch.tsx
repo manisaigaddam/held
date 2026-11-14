@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useNear } from "@/components/near-provider";
-import { COIN, DRAW_DEPOSIT, JUDGE_DEPOSIT, attempt, isFresh, poseIds, poseNames, type Attempt, type Challenge } from "@/lib/chain";
+import { COIN, DRAW_DEPOSIT, attempt, isFresh, poseIds, poseNames, type Attempt, type Challenge } from "@/lib/chain";
 import { poseMatches } from "@/lib/poses";
 
 const HOLD_MS = 750;
@@ -248,9 +248,19 @@ export function Launch() {
   async function submit() {
     if (!challenge || !near.accountId) return;
     setBusy(true);
-    setNote("The check is reading the three holds.");
+    setNote("Checking the holds. The hand stays off the chain.");
     try {
-      await near.relay("submit_hold", { challenge_id: String(challenge.id), moments: moments.current }, JUDGE_DEPOSIT);
+      const response = await fetch("/api/hold", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          account: near.accountId,
+          challengeId: String(challenge.id),
+          moments: moments.current,
+        }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "The holds were not accepted");
       let accepted = false;
       for (let attempt = 0; attempt < 15 && !accepted; attempt += 1) {
         accepted = Boolean(await isFresh(near.accountId));

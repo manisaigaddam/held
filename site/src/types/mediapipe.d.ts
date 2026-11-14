@@ -1,3 +1,9 @@
+declare module "bn.js" {
+  export default class BN {
+    constructor(value: string | number);
+  }
+}
+
 declare module "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/+esm" {
   export const FilesetResolver: {
     forVisionTasks(path: string): Promise<unknown>;

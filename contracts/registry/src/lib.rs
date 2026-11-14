@@ -1,12 +1,11 @@
 //! Held registry.
 //!
-//! A challenge stores the three poses drawn from the block seed. A pass stores
-//! the time an account completed them. The dots are checked here and are not kept.
+//! A challenge stores three pose numbers. A pass stores the time.
+//! The hand never arrives here.
 
 use near_sdk::json_types::U64;
 use near_sdk::store::LookupMap;
 use near_sdk::{env, near, AccountId, BorshStorageKey, PanicOnDefault, Promise};
-use serde::{Deserialize, Serialize};
 
 const CHALLENGE_TTL_MS: u64 = 180_000;
 
@@ -15,13 +14,6 @@ const CHALLENGE_TTL_MS: u64 = 180_000;
 enum StorageKey {
     Challenges,
     Fresh,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Moment {
-    pub pose: u8,
-    pub held_ms: u32,
-    pub points: Vec<[f32; 2]>,
 }
 
 #[derive(Clone)]
@@ -86,37 +78,31 @@ impl Registry {
         U64(id)
     }
 
-    /// Check the three holds here. A pass stores only the time.
+    /// Record a pass. The hand was checked on the server. Only this account may call.
     #[payable]
-    pub fn submit_hold(&mut self, challenge_id: U64, moments: Vec<Moment>) {
+    pub fn grant(&mut self, account: AccountId, challenge_id: U64) {
         self.refund_attached();
-        let subject = env::predecessor_account_id();
+        assert_eq!(
+            env::predecessor_account_id(),
+            env::current_account_id(),
+            "Only the relayer can record a pass"
+        );
         let mut challenge = self
             .challenges
             .get(&challenge_id.0)
             .expect("challenge")
             .clone();
-        assert_eq!(challenge.subject, subject, "This challenge belongs to another account");
+        assert_eq!(challenge.subject, account, "This challenge belongs to another account");
         assert!(challenge.open, "This challenge is already finished");
         assert!(
             env::block_timestamp_ms() <= challenge.expires_ms,
             "This challenge has expired"
         );
         assert_eq!(challenge.poses.len(), 3, "The poses are not ready");
-        assert_eq!(moments.len(), 3, "Three holds are required");
-        for (moment, required) in moments.iter().zip(challenge.poses.iter()) {
-            assert_eq!(moment.pose, *required, "The holds are in the wrong order");
-            assert!(moment.held_ms >= 750, "Hold each pose a little longer");
-            assert_eq!(moment.points.len(), 21, "A hold is missing its points");
-            assert!(
-                pose_matches(*required, &moment.points),
-                "A hold does not match its pose"
-            );
-        }
         challenge.open = false;
         self.challenges.insert(challenge_id.0, challenge);
         self.fresh.insert(
-            subject,
+            account,
             Fresh {
                 at_ms: env::block_timestamp_ms(),
                 challenge_id: challenge_id.0,
@@ -211,45 +197,6 @@ fn draw_three(seed: [u8; 32], id: u64, account: &AccountId) -> [u8; 3] {
         }
     }
     poses
-}
-
-fn pose_matches(pose: u8, points: &[[f32; 2]]) -> bool {
-    if points.len() != 21 {
-        return false;
-    }
-    let spread = mean_tip_spread(points);
-    match pose {
-        0 => spread > 0.34,
-        1 => spread < 0.22,
-        2 => finger_extended(points, 8, 5) && fingers_curled(points, &[12, 16, 20], &[9, 13, 17]),
-        3 => points[4][1] + 0.08 < points[0][1] && fingers_curled(points, &[8, 12, 16, 20], &[5, 9, 13, 17]),
-        4 => points[4][1] > points[0][1] + 0.08 && fingers_curled(points, &[8, 12, 16, 20], &[5, 9, 13, 17]),
-        5 => finger_extended(points, 8, 5) && finger_extended(points, 12, 9) && fingers_curled(points, &[16, 20], &[13, 17]),
-        _ => false,
-    }
-}
-
-fn mean_tip_spread(points: &[[f32; 2]]) -> f32 {
-    let wrist = points[0];
-    [4usize, 8, 12, 16, 20]
-        .into_iter()
-        .map(|index| dist(points[index], wrist))
-        .sum::<f32>()
-        / 5.0
-}
-
-fn finger_extended(points: &[[f32; 2]], tip: usize, mcp: usize) -> bool {
-    dist(points[tip], points[0]) > dist(points[mcp], points[0]) + 0.12
-}
-
-fn fingers_curled(points: &[[f32; 2]], tips: &[usize], mcps: &[usize]) -> bool {
-    tips.iter().zip(mcps).all(|(tip, mcp)| dist(points[*tip], points[*mcp]) < 0.14)
-}
-
-fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
-    let dx = a[0] - b[0];
-    let dy = a[1] - b[1];
-    dx.mul_add(dx, dy * dy).sqrt()
 }
 
 #[near(serializers = [json])]

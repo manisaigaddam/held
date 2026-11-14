@@ -11,7 +11,7 @@ type NearContextValue = {
   open: () => void;
   signOut: () => Promise<void>;
   call: (receiverId: string, methodName: string, args: object, deposit: string) => Promise<unknown>;
-  relay: (methodName: "request_challenge" | "submit_hold", args: object, deposit: string) => Promise<unknown>;
+  relay: (methodName: "request_challenge", args: object, deposit: string) => Promise<unknown>;
 };
 
 const NearContext = createContext<NearContextValue | null>(null);

@@ -3,7 +3,7 @@ import { Launch } from "@/components/launch";
 const guide = [
   ["Mint", "One button. The coin asks the check. A fresh account pays. An account without a pass goes to the three poses."],
   ["Hold", "The camera opens. Hold each pose it names. Draw again replaces the set."],
-  ["Pay", "After the holds, Meteor asks you to confirm the mint. That transaction is yours. The two pose transactions are paid by the relayer."],
+  ["Pay", "The server checks the hand and records the pass. Meteor then asks you to confirm the mint. That transaction is yours."],
 ];
 
 export default function Home() {
