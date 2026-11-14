@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useNear } from "@/components/near-provider";
-import { COIN, DRAW_DEPOSIT, JUDGE_DEPOSIT, REGISTRY, attempt, isFresh, poseIds, poseNames, type Attempt, type Challenge } from "@/lib/chain";
+import { COIN, DRAW_DEPOSIT, JUDGE_DEPOSIT, attempt, isFresh, poseIds, poseNames, type Attempt, type Challenge } from "@/lib/chain";
+import { poseMatches } from "@/lib/poses";
 
 const HOLD_MS = 750;
 type Moment = { pose: number; held_ms: number; points: number[][] };
@@ -29,6 +30,8 @@ export function Launch() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const moments = useRef<Moment[]>([]);
+  const sent = useRef(false);
+  const finishRef = useRef<() => void>(() => {});
   const [fresh, setFresh] = useState(false);
   const [challenge, setChallenge] = useState<OpenChallenge | null>(null);
   const [heldCount, setHeldCount] = useState(0);
@@ -73,9 +76,10 @@ export function Launch() {
         const row = await attempt(accountId).catch(() => null);
         if (row?.ready && Number(row.id) > beforeId) {
           setChallenge(toChallenge(row));
+          sent.current = false;
           setHeldCount(0);
           setStep(0);
-          setNote("Three poses are ready.");
+          setNote("Three poses are ready. Hold each one.");
           return;
         }
         await wait(3000);
@@ -83,7 +87,7 @@ export function Launch() {
     })();
     let walletError = "";
     try {
-      await near.call(REGISTRY, "request_challenge", {}, DRAW_DEPOSIT);
+      await near.relay("request_challenge", {}, DRAW_DEPOSIT);
     } catch (error) {
       walletError = error instanceof Error ? error.message : "The wallet did not finish.";
     }
@@ -92,6 +96,7 @@ export function Launch() {
       const row = await attempt(accountId).catch(() => null);
       if (row?.ready && Number(row.id) > beforeId) {
         setChallenge(toChallenge(row));
+        sent.current = false;
         setHeldCount(0);
         setStep(0);
         setNote("Three poses. Hold each one until it locks.");
@@ -198,7 +203,8 @@ export function Launch() {
             if (hand?.length === 21) lastPoints = hand.map((point) => [point.x, point.y]);
             const required = poses[index];
             const label = observed >= 0 ? poseNames[observed] : "";
-            if (observed === required && lastPoints) {
+            const shape = Boolean(lastPoints && poseMatches(required, lastPoints));
+            if (observed === required && shape && lastPoints) {
               started ??= now;
               lastMatch = now;
               const left = Math.max(0, HOLD_MS - (now - started));
@@ -212,14 +218,14 @@ export function Launch() {
                 setHeldCount(index);
                 if (index >= poses.length) {
                   say("All three locked.");
-                  setNote("All three locked. Send them.");
+                  finishRef.current();
                   return;
                 }
                 say(`Next: ${poseNames[poses[index]]}.`);
               }
             } else {
               if (started && now - lastMatch > 180) started = null;
-              say(label ? `Seeing ${label}.` : "Put your hand in frame.");
+              say(!label ? "Put your hand in frame." : observed === required ? `Seeing ${label}. Match the shape.` : `Seeing ${label}.`);
             }
           } catch {
             // The model skips a frame when the clock does not move forward.
@@ -244,7 +250,7 @@ export function Launch() {
     setBusy(true);
     setNote("The check is reading the three holds.");
     try {
-      await near.call(REGISTRY, "submit_hold", { challenge_id: String(challenge.id), moments: moments.current }, JUDGE_DEPOSIT);
+      await near.relay("submit_hold", { challenge_id: String(challenge.id), moments: moments.current }, JUDGE_DEPOSIT);
       let accepted = false;
       for (let attempt = 0; attempt < 15 && !accepted; attempt += 1) {
         accepted = Boolean(await isFresh(near.accountId));
@@ -253,8 +259,12 @@ export function Launch() {
       if (accepted) {
         setFresh(true);
         setChallenge(null);
-        setNote("Pass accepted. It lasts one minute. Mint while it is still true.");
+        setNote("Pass accepted. Confirm the mint in Meteor. You pay this gas.");
+        await near.call(COIN, "mint", {}, "0");
+        await refresh(near.accountId);
+        setNote("One coin paid to this account.");
       } else {
+        sent.current = false;
         setNote("The holds were not accepted.");
       }
     } catch (error) {
@@ -264,16 +274,30 @@ export function Launch() {
     }
   }
 
-  async function mint() {
+  finishRef.current = () => {
+    if (sent.current) return;
+    sent.current = true;
+    void submit();
+  };
+
+  async function onMint() {
     if (!near.accountId) return;
     setBusy(true);
-    setNote("The coin is reading the pass from the check.");
+    setNote("Asking the coin whether this account is fresh.");
     try {
-      await near.call(COIN, "mint", {}, "0");
-      await refresh(near.accountId);
-      setNote("One coin paid to this account.");
+      const ok = Boolean(await isFresh(near.accountId));
+      setFresh(ok);
+      if (ok) {
+        setNote("Confirm the mint in Meteor. You pay this gas.");
+        await near.call(COIN, "mint", {}, "0");
+        await refresh(near.accountId);
+        setNote("One coin paid to this account.");
+        return;
+      }
+      setNote("No pass yet. Signing the draw. The relayer pays this gas.");
+      await requestPoses();
     } catch (error) {
-      setNote(error instanceof Error ? error.message : "The mint was not sent.");
+      setNote(error instanceof Error ? error.message : "The mint did not send.");
     } finally {
       setBusy(false);
     }
@@ -330,9 +354,7 @@ export function Launch() {
           ))}
         </ol>
       )}
-      {fresh && <Button variant="clay" size="lg" disabled={busy} onClick={() => void mint()}>Mint</Button>}
-      {!fresh && !challenge && <Button variant="clay" size="lg" disabled={busy} onClick={() => void requestPoses()}>Get the poses</Button>}
-      {!fresh && challenge && heldCount === 3 && <Button variant="clay" size="lg" disabled={busy} onClick={() => void submit()}>Send the holds</Button>}
+      {!filming && <Button variant="clay" size="lg" disabled={busy} onClick={() => void onMint()}>Mint</Button>}
       {note && <p className="note">{note}</p>}
     </div>
   );

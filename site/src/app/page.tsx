@@ -1,10 +1,9 @@
 import { Launch } from "@/components/launch";
 
 const guide = [
-  ["Connect", "Install Meteor, create a testnet account, and take testnet NEAR from the faucet inside that wallet. Then use the button on this page."],
-  ["Read", "The page asks the check if this account already has a pass. A fresh account skips the camera and goes straight to mint."],
-  ["Hold", "Otherwise the check draws three poses. You hold each one. The picture never leaves this computer. Only the finished holds are sent."],
-  ["Pay", "Mint calls the check again from inside the coin. The page cannot approve itself. One pass pays once, and it expires after a minute."],
+  ["Mint", "One button. The coin asks the check. A fresh account pays. An account without a pass goes to the three poses."],
+  ["Hold", "The camera opens. Hold each pose it names. Draw again replaces the set."],
+  ["Pay", "After the holds, Meteor asks you to confirm the mint. That transaction is yours. The two pose transactions are paid by the relayer."],
 ];
 
 export default function Home() {
@@ -18,8 +17,8 @@ export default function Home() {
       <header className="hero" id="top">
         <div>
           <p className="kicker">NEAR testnet</p>
-          <h1>The coin waits for a hold.</h1>
-          <p className="lede">Three poses, drawn for this attempt. One pass, good for one minute. The coin pays only while that pass is still true on the contract.</p>
+          <h1>Mint. The coin asks first.</h1>
+          <p className="lede">One button. If this account already held the poses, the coin pays. If it has not, you hold three poses, then the same mint continues.</p>
         </div>
         <section className="desk" id="mint" aria-label="Mint">
           <Launch />

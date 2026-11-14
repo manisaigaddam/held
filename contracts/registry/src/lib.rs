@@ -108,6 +108,10 @@ impl Registry {
             assert_eq!(moment.pose, *required, "The holds are in the wrong order");
             assert!(moment.held_ms >= 750, "Hold each pose a little longer");
             assert_eq!(moment.points.len(), 21, "A hold is missing its points");
+            assert!(
+                pose_matches(*required, &moment.points),
+                "A hold does not match its pose"
+            );
         }
         challenge.open = false;
         self.challenges.insert(challenge_id.0, challenge);
@@ -207,6 +211,45 @@ fn draw_three(seed: [u8; 32], id: u64, account: &AccountId) -> [u8; 3] {
         }
     }
     poses
+}
+
+fn pose_matches(pose: u8, points: &[[f32; 2]]) -> bool {
+    if points.len() != 21 {
+        return false;
+    }
+    let spread = mean_tip_spread(points);
+    match pose {
+        0 => spread > 0.34,
+        1 => spread < 0.22,
+        2 => finger_extended(points, 8, 5) && fingers_curled(points, &[12, 16, 20], &[9, 13, 17]),
+        3 => points[4][1] + 0.08 < points[0][1] && fingers_curled(points, &[8, 12, 16, 20], &[5, 9, 13, 17]),
+        4 => points[4][1] > points[0][1] + 0.08 && fingers_curled(points, &[8, 12, 16, 20], &[5, 9, 13, 17]),
+        5 => finger_extended(points, 8, 5) && finger_extended(points, 12, 9) && fingers_curled(points, &[16, 20], &[13, 17]),
+        _ => false,
+    }
+}
+
+fn mean_tip_spread(points: &[[f32; 2]]) -> f32 {
+    let wrist = points[0];
+    [4usize, 8, 12, 16, 20]
+        .into_iter()
+        .map(|index| dist(points[index], wrist))
+        .sum::<f32>()
+        / 5.0
+}
+
+fn finger_extended(points: &[[f32; 2]], tip: usize, mcp: usize) -> bool {
+    dist(points[tip], points[0]) > dist(points[mcp], points[0]) + 0.12
+}
+
+fn fingers_curled(points: &[[f32; 2]], tips: &[usize], mcps: &[usize]) -> bool {
+    tips.iter().zip(mcps).all(|(tip, mcp)| dist(points[*tip], points[*mcp]) < 0.14)
+}
+
+fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    dx.mul_add(dx, dy * dy).sqrt()
 }
 
 #[near(serializers = [json])]

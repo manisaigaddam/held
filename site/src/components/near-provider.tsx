@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { NearConnector, type NearWalletBase } from "@hot-labs/near-connect";
-import { GAS } from "@/lib/chain";
+import { GAS, REGISTRY } from "@/lib/chain";
 
 type NearContextValue = {
   accountId: string | null;
@@ -11,6 +11,7 @@ type NearContextValue = {
   open: () => void;
   signOut: () => Promise<void>;
   call: (receiverId: string, methodName: string, args: object, deposit: string) => Promise<unknown>;
+  relay: (methodName: "request_challenge" | "submit_hold", args: object, deposit: string) => Promise<unknown>;
 };
 
 const NearContext = createContext<NearContextValue | null>(null);
@@ -32,7 +33,7 @@ export function NearProvider({ children }: { children: ReactNode }) {
     const next = new NearConnector({
       network: "testnet",
       autoConnect: false,
-      features: { signAndSendTransaction: true },
+      features: { signAndSendTransaction: true, signDelegateActions: true },
     });
     setConnector(next);
     let cancel = false;
@@ -81,6 +82,28 @@ export function NearProvider({ children }: { children: ReactNode }) {
           params: { methodName, args, gas: GAS, deposit },
         }],
       });
+    },
+    relay: async (methodName, args, deposit) => {
+      const signer = wallet ?? await connector?.wallet();
+      if (!signer || !accountId) throw new Error("Connect a testnet wallet first");
+      const signed = await signer.signDelegateActions({
+        signerId: accountId,
+        delegateActions: [{
+          receiverId: REGISTRY,
+          actions: [{
+            type: "FunctionCall",
+            params: { methodName, args, gas: GAS, deposit },
+          }],
+        }],
+      });
+      const response = await fetch("/api/relay", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ signedDelegateAction: signed.signedDelegateActions[0] }),
+      });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "The relayer did not send");
+      return body;
     },
   }), [accountId, connector, wallet, error, ready]);
 
