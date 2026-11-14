@@ -95,6 +95,7 @@ impl Registry {
                 open: true,
             },
         );
+        env::log_str(&format!("challenge:{id}"));
         self.call_room(
             serde_json::json!({ "action": "draw", "subject": subject, "challengeId": id, "seed": now }).to_string(),
             deposit,
