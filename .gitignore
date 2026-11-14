@@ -1,0 +1,8 @@
+target/
+**/*.wasm
+.near-credentials/
+**/*credentials*
+*.key
+.env
+.env.*
+*.pem

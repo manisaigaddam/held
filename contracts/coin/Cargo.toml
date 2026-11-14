@@ -1,0 +1,11 @@
+[package]
+name = "held-coin"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+near-sdk = "5.14.0"

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Held</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <img src="logo.jpg" alt="Held" width="48" height="48" />
+    <div>
+      <strong>Held</strong>
+      <p>Hold three poses. Then mint.</p>
+    </div>
+  </header>
+  <main>
+    <section id="status-card">
+      <p id="freshness">Checking this session.</p>
+      <p id="chain">Checking testnet.</p>
+      <button id="primary" type="button">Hold to mint</button>
+    </section>
+    <section id="stage" hidden>
+      <p id="ask"></p>
+      <video id="camera" autoplay playsinline muted></video>
+      <p id="hold">Keep your hand in frame.</p>
+    </section>
+    <section id="result" hidden>
+      <p id="result-text"></p>
+    </section>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

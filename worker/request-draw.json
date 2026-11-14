@@ -1,0 +1,15 @@
+{
+  "source": {
+    "Project": {
+      "project_id": "held141126.testnet/held",
+      "version_key": null
+    }
+  },
+  "resource_limits": {
+    "max_instructions": 5000000000,
+    "max_memory_mb": 128,
+    "max_execution_seconds": 30
+  },
+  "input_data": "{\"action\":\"draw\"}",
+  "response_format": "Json"
+}
