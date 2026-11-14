@@ -28,12 +28,36 @@ ext_held::ext(held_account)
 
 The follow-up runs only when Held says the caller is still inside the minute.
 
+## Try it
+
+Hosted: https://held-near.vercel.app
+
+1. Open the site in Chrome. Install Meteor and create a testnet account if you do not have one. Request testnet NEAR from the faucet inside Meteor.
+2. Connect the wallet. Click **Mint**.
+3. If the card says **Captcha done**, approve the mint in Meteor. See **One coin paid to this account.**
+4. Click **Mint** again while it still says Mint. The coin refuses a second payment for the same captcha.
+5. Click **New captcha**. Hold the three gestures the camera names. See the card return to a mint.
+6. Open **For apps**. The protected method calls `held141126.testnet.is_fresh`. The example is `coin.held141126.testnet`.
+
+Local site, from `site/`:
+
+```sh
+npm install
+npm run dev
+```
+
+The pose draw and the pass need `RELAYER_ACCOUNT_ID` and `RELAYER_PRIVATE_KEY` in the environment. Without them, the draw is sent from the connected wallet. The mint is always signed by that wallet.
+
 ## Testnet
 
 | | Account |
 | --- | --- |
 | Check | `held141126.testnet` |
 | Coin | `coin.held141126.testnet` |
+
+## Built with
+
+MediaPipe gesture recognition in the browser, NEAR Connect for Meteor, and `near-api-js` for the relayer. The captcha shape follows GestureGate. The NEAR contracts, the required `is_fresh` call, and this coin were built for this hackathon. AI tools were used to write code.
 
 ## Later
 
