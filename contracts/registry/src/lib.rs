@@ -62,11 +62,12 @@ impl Registry {
         }
     }
 
-    /// Draw three poses for the caller. The block seed is NEAR's VRF output for this block.
+    /// Draw three new poses. Any open draw for this account is closed first.
     #[payable]
     pub fn request_challenge(&mut self) -> U64 {
         self.refund_attached();
         let subject = env::predecessor_account_id();
+        self.close_open(&subject);
         let id = self.next_id;
         self.next_id += 1;
         let now = env::block_timestamp_ms();
@@ -154,6 +155,22 @@ impl Registry {
             });
         }
         None
+    }
+
+    fn close_open(&mut self, subject: &AccountId) {
+        let mut id = self.next_id;
+        let mut looked = 0u32;
+        while id > 1 && looked < 40 {
+            id -= 1;
+            looked += 1;
+            let Some(mut challenge) = self.challenges.get(&id).cloned() else {
+                continue;
+            };
+            if challenge.subject == *subject && challenge.open {
+                challenge.open = false;
+                self.challenges.insert(id, challenge);
+            }
+        }
     }
 
     fn refund_attached(&self) {

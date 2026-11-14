@@ -27,6 +27,7 @@ function toChallenge(row: Attempt): OpenChallenge {
 export function Launch() {
   const near = useNear();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const moments = useRef<Moment[]>([]);
   const [fresh, setFresh] = useState(false);
   const [challenge, setChallenge] = useState<OpenChallenge | null>(null);
@@ -46,7 +47,7 @@ export function Launch() {
       }
       const row = await attempt(accountId);
       setChallenge(row?.ready ? toChallenge(row) : null);
-      if (row && !row.ready) setNote("The last draw did not return three poses. Almost all of the NEAR came back.");
+      if (row && !row.ready) setNote("That draw is finished. Draw again.");
       return value;
     } catch (error) {
       setNote(error instanceof Error ? error.message : "The check could not be read.");
@@ -115,12 +116,29 @@ export function Launch() {
   useEffect(() => {
     if (!filming || !challenge) return;
     const video = videoRef.current;
-    if (!video) return;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
     const poses = challenge.poses;
+    const context = canvas.getContext("2d");
     let stopped = false;
     let stream: MediaStream | null = null;
     let frame = 0;
-    let detector: { close?: () => void; recognizeForVideo: (v: HTMLVideoElement, t: number) => { gestures?: { categoryName?: string; score?: number }[][]; landmarks?: { x: number; y: number }[][] } } | null = null;
+    let detector: { close: () => void; recognizeForVideo: (v: HTMLVideoElement, t: number) => { gestures?: { categoryName?: string }[][]; landmarks?: { x: number; y: number }[][] } } | null = null;
+    const paint = (hand?: { x: number; y: number }[]) => {
+      if (!context) return;
+      const width = video.videoWidth || 640;
+      const height = video.videoHeight || 480;
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      context.clearRect(0, 0, width, height);
+      if (!hand) return;
+      context.fillStyle = "#f3efe7";
+      for (const point of hand) {
+        context.beginPath();
+        context.arc(point.x * width, point.y * height, 5, 0, Math.PI * 2);
+        context.fill();
+      }
+    };
     const run = async () => {
       moments.current = [];
       setSeen("Starting the camera.");
@@ -129,76 +147,82 @@ export function Launch() {
           video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 720 } },
           audio: false,
         });
+        if (stopped) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        video.srcObject = stream;
+        await video.play();
+        const vision = await import("@mediapipe/tasks-vision");
+        const files = await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm");
+        detector = await vision.GestureRecognizer.createFromOptions(files, {
+          baseOptions: {
+            delegate: "CPU",
+            modelAssetPath: "https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task",
+          },
+          runningMode: "VIDEO",
+          numHands: 1,
+          minHandDetectionConfidence: 0.5,
+          minHandPresenceConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
       } catch (error) {
         if (!stopped) setSeen(error instanceof Error ? error.message : "The camera did not start.");
+        stream?.getTracks().forEach((track) => track.stop());
         return;
       }
-      if (stopped || !videoRef.current) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      video.srcObject = stream;
-      await video.play();
-      const vision = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/+esm");
-      const files = await vision.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm");
-      detector = await vision.GestureRecognizer.createFromOptions(files, {
-        baseOptions: {
-          delegate: "CPU",
-          modelAssetPath: "https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/gesture_recognizer.task",
-        },
-        runningMode: "VIDEO",
-        numHands: 1,
-        minHandDetectionConfidence: 0.5,
-        minHandPresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-        cannedGesturesClassifierOptions: {
-          categoryAllowlist: Object.keys(poseIds),
-          scoreThreshold: 0.55,
-          maxResults: 1,
-        },
-      });
-      if (stopped) return;
+      if (stopped || !detector) return;
+      setSeen("Put your hand in frame.");
       let index = 0;
       let started: number | null = null;
       let lastMatch = 0;
       let lastPoints: number[][] | null = null;
       let lastStamp = 0;
+      let lastLine = "";
+      const say = (line: string) => {
+        if (line === lastLine) return;
+        lastLine = line;
+        setSeen(line);
+      };
       const tick = () => {
-        if (stopped || !videoRef.current || !detector || index >= poses.length) return;
+        if (stopped || !detector || index >= poses.length) return;
         const now = performance.now();
-        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && now > lastStamp) {
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0 && now > lastStamp) {
           lastStamp = now;
           try {
             const result = detector.recognizeForVideo(video, now);
-            const recognized = result.gestures?.[0]?.[0];
-            const observed = recognized?.categoryName ? (poseIds[recognized.categoryName] ?? -1) : -1;
+            const name = result.gestures?.[0]?.[0]?.categoryName;
+            const observed = name ? (poseIds[name] ?? -1) : -1;
             const hand = result.landmarks?.[0];
+            paint(hand);
             if (hand?.length === 21) lastPoints = hand.map((point) => [point.x, point.y]);
             const required = poses[index];
-            const label = observed >= 0 ? poseNames[observed] : "no hand";
+            const label = observed >= 0 ? poseNames[observed] : "";
             if (observed === required && lastPoints) {
               started ??= now;
               lastMatch = now;
               const left = Math.max(0, HOLD_MS - (now - started));
-              setSeen(left > 0 ? `${poseNames[required]}. Hold ${Math.ceil(left / 100) / 10}s.` : poseNames[required]);
+              say(`${poseNames[required]}. Hold ${Math.ceil(left / 100) / 10}s.`);
               if (now - started >= HOLD_MS) {
                 moments.current.push({ pose: required, held_ms: Math.round(now - started), points: lastPoints });
                 index += 1;
                 started = null;
+                lastPoints = null;
                 setStep(index);
                 setHeldCount(index);
                 if (index >= poses.length) {
-                  setSeen("All three locked.");
+                  say("All three locked.");
                   setNote("All three locked. Send them.");
                   return;
                 }
+                say(`Next: ${poseNames[poses[index]]}.`);
               }
             } else {
               if (started && now - lastMatch > 180) started = null;
-              setSeen(observed < 0 ? "Put your hand in frame." : `Seeing ${label}.`);
+              say(label ? `Seeing ${label}.` : "Put your hand in frame.");
             }
           } catch {
-            // A frame can arrive before the previous one is finished.
+            // The model skips a frame when the clock does not move forward.
           }
         }
         frame = requestAnimationFrame(tick);
@@ -209,9 +233,9 @@ export function Launch() {
     return () => {
       stopped = true;
       cancelAnimationFrame(frame);
-      detector?.close?.();
+      detector?.close();
       stream?.getTracks().forEach((track) => track.stop());
-      if (videoRef.current) videoRef.current.srcObject = null;
+      if (video.srcObject) video.srcObject = null;
     };
   }, [filming, challenge]);
 
@@ -286,9 +310,13 @@ export function Launch() {
       {!fresh && challenge && heldCount === 3 && <h2>The holds are ready to send.</h2>}
       {filming && (
         <div className="camera">
-          <video ref={videoRef} autoPlay playsInline muted />
+          <div className="stage">
+            <video ref={videoRef} autoPlay playsInline muted />
+            <canvas ref={canvasRef} />
+          </div>
           <div className="camera-bar">
             <span>Pose {Math.min(step + 1, 3)} of 3. {seen}</span>
+            <button type="button" disabled={busy} onClick={() => void requestPoses()}>Draw again</button>
           </div>
         </div>
       )}
