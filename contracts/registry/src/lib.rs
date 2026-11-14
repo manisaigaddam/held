@@ -1,18 +1,14 @@
 //! Held registry.
 //!
-//! A challenge stores the three poses that were drawn. A pass stores the time
-//! an account completed them. The dots from a hold are forwarded to the room
-//! and are not kept here.
+//! A challenge stores the three poses drawn from the block seed. A pass stores
+//! the time an account completed them. The dots are checked here and are not kept.
 
 use near_sdk::json_types::U64;
 use near_sdk::store::LookupMap;
-use near_sdk::{env, near, AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise};
+use near_sdk::{env, near, AccountId, BorshStorageKey, PanicOnDefault, Promise};
 use serde::{Deserialize, Serialize};
 
-const OUTLAYER_TESTNET: &str = "outlayer.testnet";
-const DRAW_DEPOSIT: NearToken = NearToken::from_millinear(20);
-const JUDGE_DEPOSIT: NearToken = NearToken::from_millinear(30);
-const CHALLENGE_TTL_MS: u64 = 90_000;
+const CHALLENGE_TTL_MS: u64 = 180_000;
 
 #[derive(BorshStorageKey)]
 #[near(serializers = [borsh])]
@@ -45,16 +41,6 @@ pub struct Fresh {
     pub challenge_id: u64,
 }
 
-#[derive(Deserialize)]
-struct DrawOutput {
-    poses: Vec<u8>,
-}
-
-#[derive(Deserialize)]
-struct JudgeOutput {
-    pass: bool,
-}
-
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Registry {
@@ -76,75 +62,35 @@ impl Registry {
         }
     }
 
-    /// Ask the room for three poses. The account that calls is the subject.
+    /// Draw three poses for the caller. The block seed is NEAR's VRF output for this block.
     #[payable]
-    pub fn request_challenge(&mut self) -> Promise {
-        let deposit = env::attached_deposit();
-        assert!(deposit >= DRAW_DEPOSIT, "Attach at least 0.02 NEAR");
+    pub fn request_challenge(&mut self) -> U64 {
+        self.refund_attached();
         let subject = env::predecessor_account_id();
         let id = self.next_id;
         self.next_id += 1;
         let now = env::block_timestamp_ms();
+        let poses = draw_three(env::random_seed_array(), id, &subject);
         self.challenges.insert(
             id,
             Challenge {
-                subject: subject.clone(),
-                poses: Vec::new(),
+                subject,
+                poses: poses.to_vec(),
                 created_ms: now,
                 expires_ms: now + CHALLENGE_TTL_MS,
                 open: true,
             },
         );
-        env::log_str(&format!("challenge:{id}"));
-        self.call_room(
-            serde_json::json!({ "action": "draw", "subject": subject, "challengeId": id, "seed": now }).to_string(),
-            deposit,
-        )
-        .then(
-            Self::ext(env::current_account_id())
-                .with_static_gas(Gas::from_tgas(30))
-                .on_draw(id),
-        )
+        env::log_str(&format!("poses:{id}:{},{},{}", poses[0], poses[1], poses[2]));
+        U64(id)
     }
 
-    #[private]
-    pub fn on_draw(&mut self, challenge_id: u64) {
-        let challenge = self
-            .challenges
-            .get(&challenge_id)
-            .expect("challenge")
-            .clone();
-        if !challenge.open || env::block_timestamp_ms() > challenge.expires_ms {
-            return;
-        }
-        let text = match env::promise_result(0) {
-            near_sdk::PromiseResult::Successful(bytes) => String::from_utf8(bytes).unwrap_or_default(),
-            _ => return,
-        };
-        let Ok(drawn) = serde_json::from_str::<DrawOutput>(&text) else {
-            return;
-        };
-        if drawn.poses.len() != 3 || drawn.poses.iter().any(|pose| *pose > 5) {
-            return;
-        }
-        if drawn.poses[0] == drawn.poses[1]
-            || drawn.poses[1] == drawn.poses[2]
-            || drawn.poses[0] == drawn.poses[2]
-        {
-            return;
-        }
-        let mut stored = challenge;
-        stored.poses = drawn.poses;
-        self.challenges.insert(challenge_id, stored);
-    }
-
-    /// Send the three held moments. The room judges them against the stored poses.
+    /// Check the three holds here. A pass stores only the time.
     #[payable]
-    pub fn submit_hold(&mut self, challenge_id: U64, moments: Vec<Moment>) -> Promise {
-        let deposit = env::attached_deposit();
-        assert!(deposit >= JUDGE_DEPOSIT, "Attach at least 0.03 NEAR");
+    pub fn submit_hold(&mut self, challenge_id: U64, moments: Vec<Moment>) {
+        self.refund_attached();
         let subject = env::predecessor_account_id();
-        let challenge = self
+        let mut challenge = self
             .challenges
             .get(&challenge_id.0)
             .expect("challenge")
@@ -157,56 +103,22 @@ impl Registry {
         );
         assert_eq!(challenge.poses.len(), 3, "The poses are not ready");
         assert_eq!(moments.len(), 3, "Three holds are required");
-
-        self.call_room(
-            serde_json::json!({
-                "action": "judge",
-                "version": 1,
-                "subject": subject,
-                "challengeId": challenge_id.0,
-                "poses": challenge.poses,
-                "moments": moments,
-            })
-            .to_string(),
-            deposit,
-        )
-        .then(
-            Self::ext(env::current_account_id())
-                .with_static_gas(Gas::from_tgas(40))
-                .on_judge(challenge_id.0, subject),
-        )
-    }
-
-    #[private]
-    pub fn on_judge(&mut self, challenge_id: u64, subject: AccountId) {
-        let text = match env::promise_result(0) {
-            near_sdk::PromiseResult::Successful(bytes) => String::from_utf8(bytes).unwrap_or_default(),
-            _ => return,
-        };
-        let Ok(judge) = serde_json::from_str::<JudgeOutput>(&text) else {
-            return;
-        };
-        if !judge.pass {
-            return;
-        }
-        let Some(mut challenge) = self.challenges.get(&challenge_id).cloned() else {
-            return;
-        };
-        if !challenge.open || challenge.subject != subject {
-            return;
-        }
-        if env::block_timestamp_ms() > challenge.expires_ms {
-            challenge.open = false;
-            self.challenges.insert(challenge_id, challenge);
-            return;
+        for (moment, required) in moments.iter().zip(challenge.poses.iter()) {
+            assert_eq!(moment.pose, *required, "The holds are in the wrong order");
+            assert!(moment.held_ms >= 750, "Hold each pose a little longer");
+            assert_eq!(moment.points.len(), 21, "A hold is missing its points");
+            assert!(
+                pose_matches(*required, &moment.points),
+                "A hold does not match its pose"
+            );
         }
         challenge.open = false;
-        self.challenges.insert(challenge_id, challenge);
+        self.challenges.insert(challenge_id.0, challenge);
         self.fresh.insert(
             subject,
             Fresh {
                 at_ms: env::block_timestamp_ms(),
-                challenge_id,
+                challenge_id: challenge_id.0,
             },
         );
     }
@@ -222,25 +134,120 @@ impl Registry {
         self.challenges.get(&challenge_id.0).cloned()
     }
 
-    fn call_room(&self, input: String, deposit: NearToken) -> Promise {
-        Promise::new(OUTLAYER_TESTNET.parse().unwrap()).function_call(
-            "request_execution".to_string(),
-            serde_json::json!({
-                "source": { "Project": { "project_id": self.project_id, "version_key": null } },
-                "resource_limits": {
-                    "max_instructions": 5_000_000_000u64,
-                    "max_memory_mb": 128,
-                    "max_execution_seconds": 30
-                },
-                "input_data": input,
-                "secrets_ref": null,
-                "response_format": "Json",
-                "payer_account_id": env::predecessor_account_id(),
-            })
-            .to_string()
-            .into_bytes(),
-            deposit,
-            Gas::from_tgas(80),
-        )
+    /// The newest attempt for this account, in one read.
+    pub fn attempt(&self, account: AccountId) -> Option<Attempt> {
+        let now = env::block_timestamp_ms();
+        let mut id = self.next_id;
+        let mut looked = 0u32;
+        while id > 1 && looked < 40 {
+            id -= 1;
+            looked += 1;
+            let Some(challenge) = self.challenges.get(&id) else {
+                continue;
+            };
+            if challenge.subject != account {
+                continue;
+            }
+            let ready = challenge.open && challenge.poses.len() == 3 && now <= challenge.expires_ms;
+            return Some(Attempt {
+                id: U64(id),
+                poses: challenge.poses.clone(),
+                open: challenge.open,
+                expires_ms: challenge.expires_ms,
+                ready,
+            });
+        }
+        None
     }
+
+    fn refund_attached(&self) {
+        let deposit = env::attached_deposit();
+        if deposit.as_yoctonear() > 0 {
+            Promise::new(env::predecessor_account_id()).transfer(deposit).detach();
+        }
+    }
+}
+
+fn draw_three(seed: [u8; 32], id: u64, account: &AccountId) -> [u8; 3] {
+    let mut state = u64::from_le_bytes(seed[..8].try_into().unwrap());
+    state ^= id.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    for (index, byte) in account.as_bytes().iter().enumerate() {
+        state ^= (*byte as u64) << ((index % 8) * 8);
+    }
+    state |= 1;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state % 6) as u8
+    };
+    let mut poses = [0u8; 3];
+    let mut used = [false; 6];
+    for pose in &mut poses {
+        loop {
+            let pick = next();
+            if !used[pick as usize] {
+                used[pick as usize] = true;
+                *pose = pick;
+                break;
+            }
+        }
+    }
+    poses
+}
+
+fn pose_matches(pose: u8, points: &[[f32; 2]]) -> bool {
+    if points.len() != 21 {
+        return false;
+    }
+    let spread = mean_tip_spread(points);
+    match pose {
+        0 => spread > 0.34,
+        1 => spread < 0.22,
+        2 => finger_extended(points, 8, 5) && fingers_curled(points, &[12, 16, 20], &[9, 13, 17]),
+        3 => points[4][1] + 0.08 < points[0][1]
+            && fingers_curled(points, &[8, 12, 16, 20], &[5, 9, 13, 17]),
+        4 => points[4][1] > points[0][1] + 0.08
+            && fingers_curled(points, &[8, 12, 16, 20], &[5, 9, 13, 17]),
+        5 => {
+            finger_extended(points, 8, 5)
+                && finger_extended(points, 12, 9)
+                && fingers_curled(points, &[16, 20], &[13, 17])
+        }
+        _ => false,
+    }
+}
+
+fn mean_tip_spread(points: &[[f32; 2]]) -> f32 {
+    let wrist = points[0];
+    [4, 8, 12, 16, 20]
+        .into_iter()
+        .map(|index| dist(points[index], wrist))
+        .sum::<f32>()
+        / 5.0
+}
+
+fn finger_extended(points: &[[f32; 2]], tip: usize, mcp: usize) -> bool {
+    dist(points[tip], points[0]) > dist(points[mcp], points[0]) + 0.12
+}
+
+fn fingers_curled(points: &[[f32; 2]], tips: &[usize], mcps: &[usize]) -> bool {
+    tips.iter()
+        .zip(mcps)
+        .all(|(tip, mcp)| dist(points[*tip], points[*mcp]) < 0.14)
+}
+
+fn dist(a: [f32; 2], b: [f32; 2]) -> f32 {
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    dx.mul_add(dx, dy * dy).sqrt()
+}
+
+#[near(serializers = [json])]
+pub struct Attempt {
+    pub id: U64,
+    pub poses: Vec<u8>,
+    pub open: bool,
+    pub expires_ms: u64,
+    pub ready: bool,
 }

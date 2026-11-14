@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useNear } from "@/components/near-provider";
-import { COIN, DRAW_DEPOSIT, JUDGE_DEPOSIT, REGISTRY, getChallenge, isFresh, latestOpenChallenge, poseIds, poseNames, type Challenge } from "@/lib/chain";
+import { COIN, DRAW_DEPOSIT, JUDGE_DEPOSIT, REGISTRY, attempt, isFresh, poseIds, poseNames, type Attempt, type Challenge } from "@/lib/chain";
 import { poseMatches } from "@/lib/poses";
 
 const HOLD_MS = 750;
@@ -14,19 +14,15 @@ function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function newestOpenId(account: string) {
-  let found: number | null = null;
-  let misses = 0;
-  for (let id = 1; id < 200 && misses < 2; id += 1) {
-    const challenge = await getChallenge(id);
-    if (!challenge) {
-      misses += 1;
-      continue;
-    }
-    misses = 0;
-    if (challenge.subject === account && challenge.open) found = id;
-  }
-  return found;
+function toChallenge(row: Attempt): OpenChallenge {
+  return {
+    id: Number(row.id),
+    subject: "",
+    poses: row.poses,
+    created_ms: 0,
+    expires_ms: row.expires_ms,
+    open: row.open,
+  };
 }
 
 export function Launch() {
@@ -42,10 +38,21 @@ export function Launch() {
   const [note, setNote] = useState("");
 
   async function refresh(accountId: string) {
-    const value = Boolean(await isFresh(accountId));
-    setFresh(value);
-    setChallenge(value ? null : await latestOpenChallenge(accountId));
-    return value;
+    try {
+      const value = Boolean(await isFresh(accountId));
+      setFresh(value);
+      if (value) {
+        setChallenge(null);
+        return true;
+      }
+      const row = await attempt(accountId);
+      setChallenge(row?.ready ? toChallenge(row) : null);
+      if (row && !row.ready) setNote("The last draw did not return three poses. Almost all of the NEAR came back.");
+      return value;
+    } catch (error) {
+      setNote(error instanceof Error ? error.message : "The check could not be read.");
+      return false;
+    }
   }
 
   useEffect(() => {
@@ -55,31 +62,53 @@ export function Launch() {
 
   async function requestPoses() {
     if (!near.accountId) return;
+    const accountId = near.accountId;
     setBusy(true);
-    setNote("Your wallet is paying the room to draw three poses.");
+    setNote("Your wallet is drawing three poses.");
+    const before = await attempt(accountId).catch(() => null);
+    const beforeId = before ? Number(before.id) : 0;
+    let stop = false;
+    const watch = (async () => {
+      while (!stop) {
+        const row = await attempt(accountId).catch(() => null);
+        if (row?.ready && Number(row.id) > beforeId) {
+          setChallenge(toChallenge(row));
+          setHeldCount(0);
+          setStep(0);
+          setNote("Three poses are ready.");
+          return;
+        }
+        await wait(3000);
+      }
+    })();
+    let walletError = "";
     try {
       await near.call(REGISTRY, "request_challenge", {}, DRAW_DEPOSIT);
-      const accountId = near.accountId;
-      let id: number | null = null;
-      for (let attempt = 0; attempt < 8 && id == null; attempt += 1) {
-        id = await newestOpenId(accountId);
-        if (id == null) await wait(1500);
-      }
-      let drawn: OpenChallenge | null = null;
-      for (let attempt = 0; attempt < 16 && id != null && !drawn; attempt += 1) {
-        const stored = await getChallenge(id);
-        if (stored?.poses?.length === 3) drawn = { ...stored, id };
-        else await wait(2000);
-      }
-      setChallenge(drawn);
-      setHeldCount(0);
-      setStep(0);
-      setNote(drawn ? "Three poses. Hold each one until it locks." : "The poses have not landed yet. Ask again in a moment.");
     } catch (error) {
-      setNote(error instanceof Error ? error.message : "The request did not send.");
-    } finally {
-      setBusy(false);
+      walletError = error instanceof Error ? error.message : "The wallet did not finish.";
     }
+    stop = true;
+    for (let i = 0; i < 8; i += 1) {
+      const row = await attempt(accountId).catch(() => null);
+      if (row?.ready && Number(row.id) > beforeId) {
+        setChallenge(toChallenge(row));
+        setHeldCount(0);
+        setStep(0);
+        setNote("Three poses. Hold each one until it locks.");
+        setBusy(false);
+        return;
+      }
+      if (row && Number(row.id) > beforeId && !row.open) {
+        setChallenge(null);
+        setNote("This draw did not return three poses.");
+        setBusy(false);
+        return;
+      }
+      await wait(3000);
+    }
+    setNote(walletError || "The poses have not appeared yet.");
+    setBusy(false);
+    await watch.catch(() => undefined);
   }
 
   useEffect(() => {
@@ -169,7 +198,7 @@ export function Launch() {
   async function submit() {
     if (!challenge || !near.accountId) return;
     setBusy(true);
-    setNote("The room is judging the three holds.");
+    setNote("The check is reading the three holds.");
     try {
       await near.call(REGISTRY, "submit_hold", { challenge_id: String(challenge.id), moments: moments.current }, JUDGE_DEPOSIT);
       let accepted = false;
@@ -182,7 +211,7 @@ export function Launch() {
         setChallenge(null);
         setNote("Pass accepted. It lasts one minute. Mint while it is still true.");
       } else {
-        setNote("The room has not accepted these holds.");
+        setNote("The holds were not accepted.");
       }
     } catch (error) {
       setNote(error instanceof Error ? error.message : "The holds were not sent.");

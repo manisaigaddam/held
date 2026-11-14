@@ -3,7 +3,7 @@ import { Launch } from "@/components/launch";
 const guide = [
   ["Connect", "Install Meteor, create a testnet account, and take testnet NEAR from the faucet inside that wallet. Then use the button on this page."],
   ["Read", "The page asks the check if this account already has a pass. A fresh account skips the camera and goes straight to mint."],
-  ["Hold", "Otherwise the room draws three poses. You hold each one. The picture never leaves this computer. Only the finished holds are sent."],
+  ["Hold", "Otherwise the check draws three poses. You hold each one. The picture never leaves this computer. Only the finished holds are sent."],
   ["Pay", "Mint calls the check again from inside the coin. The page cannot approve itself. One pass pays once, and it expires after a minute."],
 ];
 
